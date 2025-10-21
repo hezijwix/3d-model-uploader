@@ -29,9 +29,11 @@ class ModelViewer {
         this.hdriIntensity = 1.0;
         this.hdriRotation = 0;
         
-        // Store original rotations for HDRI rotation workaround
-        this.cameraOriginalRotation = 0;
-        this.modelOriginalRotation = 0;
+        // Store original HDRI texture for proper rotation with lighting
+        this.originalHDRITexture = null;
+        
+        // Debounce timer for performance
+        this.hdriRotationTimer = null;
         
         // HDRI presets (Premium quality from Poly Haven - 2K resolution for better quality)
         this.hdriPresets = {
@@ -172,32 +174,23 @@ class ModelViewer {
                 // Set texture mapping for environment
                 texture.mapping = THREE.EquirectangularReflectionMapping;
                 
-                // Generate high-quality environment map with PMREM
-                const envMap = this.pmremGenerator.fromEquirectangular(texture).texture;
+                // CRITICAL: Store original texture for rotation
+                // We clone it so we can regenerate with different rotations
+                if (this.originalHDRITexture) {
+                    this.originalHDRITexture.dispose();
+                }
+                this.originalHDRITexture = texture.clone();
+                this.originalHDRITexture.mapping = THREE.EquirectangularReflectionMapping;
                 
-                // Apply to scene environment (for lighting/reflections)
-                this.scene.environment = envMap;
+                console.log(`✓ Original HDRI texture stored for rotation`);
                 
-                // Apply to scene background (make it visible)
-                this.scene.background = envMap;
-                
-                // Store reference
-                this.currentHDRI = envMap;
-                
-                console.log(`✓ Environment map generated and applied`);
-                console.log(`  - scene.environment:`, this.scene.environment);
-                console.log(`  - scene.background:`, this.scene.background);
-                
-                // Apply rotation and intensity
-                this.updateHDRISettings();
+                // Generate environment with current rotation
+                this.generateRotatedEnvironment(texture, this.hdriRotation * Math.PI / 180);
                 
                 // If model exists, reapply environment to materials
                 if (this.currentModel) {
                     this.applyEnvironmentToModel();
                 }
-                
-                // Cleanup original texture
-                texture.dispose();
                 
                 console.log(`✅ HDRI fully loaded: ${presetName} (2K quality)`);
             },
@@ -214,32 +207,82 @@ class ModelViewer {
         );
     }
     
-    updateHDRISettings() {
-        // Update environment rotation
+    generateRotatedEnvironment(texture, rotationRadians) {
+        console.log(`🔄 Generating environment with rotation: ${(rotationRadians * 180 / Math.PI).toFixed(0)}°`);
+        
+        // Clone texture for rotation
+        const rotatedTexture = texture.clone();
+        rotatedTexture.mapping = THREE.EquirectangularReflectionMapping;
+        
+        // Apply rotation by adjusting texture transformation
+        // This rotates the HDRI BEFORE converting to cubemap
+        // So the lighting direction actually changes (like Cinema 4D/Blender)
+        rotatedTexture.center.set(0.5, 0.5);
+        rotatedTexture.rotation = -rotationRadians; // Negative for correct direction
+        rotatedTexture.wrapS = THREE.RepeatWrapping;
+        rotatedTexture.wrapT = THREE.ClampToEdgeWrapping;
+        rotatedTexture.needsUpdate = true;
+        
+        // Dispose old environment map
+        if (this.currentHDRI) {
+            this.currentHDRI.dispose();
+        }
+        
+        // Generate PMREM cubemap from rotated equirectangular texture
+        const envMap = this.pmremGenerator.fromEquirectangular(rotatedTexture).texture;
+        
+        // Apply to scene (BOTH lighting and background)
+        this.scene.environment = envMap;
+        this.scene.background = envMap;
+        
+        // Store reference
+        this.currentHDRI = envMap;
+        
+        console.log(`✓ Environment map regenerated with rotation`);
+        console.log(`  - Lighting direction updated (IBL)`);
+        console.log(`  - Background rotated`);
+        
+        // Apply to existing model materials
+        if (this.currentModel) {
+            this.applyEnvironmentToModel();
+        }
+        
+        // Cleanup rotated texture (we only need the cubemap)
+        rotatedTexture.dispose();
+    }
+    
+    updateHDRISettings(forceRegenerate = false) {
         const rotationRadians = this.hdriRotation * Math.PI / 180;
         
         console.log(`🔄 Updating HDRI settings...`);
-        console.log(`  - Rotation: ${this.hdriRotation}° (${rotationRadians} rad)`);
+        console.log(`  - Rotation: ${this.hdriRotation}°`);
         console.log(`  - Intensity: ${this.hdriIntensity}`);
         
-        // Use Three.js r162+ native rotation ONLY
-        // This properly rotates the environment without affecting the model/camera
-        if (this.scene.environmentRotation) {
-            this.scene.environmentRotation.set(0, rotationRadians, 0);
-            console.log(`  ✓ Environment rotation set via scene.environmentRotation`);
-        } else {
-            console.warn(`  ⚠️ scene.environmentRotation not available - Three.js r162+ required for HDRI rotation`);
+        // REGENERATE environment map with rotation applied (like Cinema 4D/Blender)
+        // This ensures BOTH background AND lighting rotate together
+        if (this.originalHDRITexture && forceRegenerate) {
+            this.generateRotatedEnvironment(this.originalHDRITexture, rotationRadians);
+            console.log(`  ✓ Environment regenerated with rotation - lighting updated!`);
         }
         
-        if (this.scene.backgroundRotation) {
-            this.scene.backgroundRotation.set(0, rotationRadians, 0);
-            console.log(`  ✓ Background rotation set via scene.backgroundRotation`);
-        } else {
-            console.warn(`  ⚠️ scene.backgroundRotation not available`);
-        }
+        // Update intensity (tone mapping exposure)
+        this.renderer.toneMappingExposure = this.hdriIntensity;
+        console.log(`  ✓ Tone mapping exposure: ${this.renderer.toneMappingExposure}`);
         
-        // DO NOT ROTATE CAMERA - this was causing the model to rotate too
-        // Camera stays fixed, only environment rotates via native Three.js API
+        // Update all material env map intensities
+        let materialsUpdated = 0;
+        this.scene.traverse((child) => {
+            if (child.isMesh && child.material) {
+                const materials = Array.isArray(child.material) ? child.material : [child.material];
+                materials.forEach(mat => {
+                    mat.envMapIntensity = this.hdriIntensity;
+                    mat.needsUpdate = true;
+                    materialsUpdated++;
+                });
+            }
+        });
+        
+        console.log(`  ✓ Updated ${materialsUpdated} materials with intensity`);
         
         // Apply user's manual model rotations (independent of HDRI rotation)
         if (this.modelContainer) {
@@ -256,29 +299,6 @@ class ModelViewer {
             console.log(`  ✓ Model rotation applied (independent of HDRI)`);
         }
         
-        // Update environment intensity on renderer (tone mapping exposure)
-        this.renderer.toneMappingExposure = this.hdriIntensity;
-        console.log(`  ✓ Tone mapping exposure: ${this.renderer.toneMappingExposure}`);
-        
-        // Update all materials in the scene for proper IBL
-        let materialsUpdated = 0;
-        this.scene.traverse((child) => {
-            if (child.isMesh && child.material) {
-                if (Array.isArray(child.material)) {
-                    child.material.forEach(mat => {
-                        mat.envMapIntensity = this.hdriIntensity;
-                        mat.needsUpdate = true;
-                        materialsUpdated++;
-                    });
-                } else {
-                    child.material.envMapIntensity = this.hdriIntensity;
-                    child.material.needsUpdate = true;
-                    materialsUpdated++;
-                }
-            }
-        });
-        
-        console.log(`  ✓ Updated ${materialsUpdated} materials with intensity=${this.hdriIntensity}`);
         console.log(`✅ HDRI settings updated successfully`);
     }
     
@@ -517,7 +537,21 @@ class ModelViewer {
             this.hdriRotation = parseFloat(e.target.value);
             document.getElementById('hdri-rotation-value').textContent = this.hdriRotation + '°';
             console.log(`🔄 User rotated HDRI to: ${this.hdriRotation}°`);
-            this.updateHDRISettings();
+            
+            // Debounce for performance (regenerating PMREM is expensive)
+            // Update preview immediately with intensity, regenerate after user stops
+            this.updateHDRISettings(false); // Update intensity immediately
+            
+            // Clear existing timer
+            if (this.hdriRotationTimer) {
+                clearTimeout(this.hdriRotationTimer);
+            }
+            
+            // Regenerate environment after 300ms of no input (user stopped moving slider)
+            this.hdriRotationTimer = setTimeout(() => {
+                console.log(`⚡ Regenerating environment with rotation for proper IBL...`);
+                this.updateHDRISettings(true); // Force regenerate
+            }, 300);
         });
         
         // Turntable animation
