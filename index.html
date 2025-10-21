@@ -20,15 +20,37 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <!-- ========== EDIT THIS: Your Tool Name ========== -->
-    <title>Tool Name - Chatooly</title>
+    <title>3D Model Uploader - Chatooly</title>
     
     <!-- ========== DO NOT EDIT: Required CDN Styles ========== -->
     <link rel="stylesheet" href="https://yaelren.github.io/chatooly-cdn/css/unified.min.css">
+    
+    <!-- Three.js Library and Loaders (r162+ for environment rotation support) -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+        import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+        
+        // Expose THREE and loaders globally for main.js
+        window.THREE = THREE;
+        window.GLTFLoader = GLTFLoader;
+        window.FBXLoader = FBXLoader;
+        window.RGBELoader = RGBELoader;
+    </script>
 </head>
 <body>
     <!-- ========== EDIT THIS: Update header title to match your tool ========== -->
     <header class="chatooly-header">
-        <div class="chatooly-header-title">Tool Name</div>
+        <div class="chatooly-header-title">3D Model Uploader</div>
         <div class="chatooly-header-credit">MADE WITH CHATOOLY</div>
     </header>
 
@@ -37,7 +59,7 @@
         <div class="chatooly-controls-panel">
             <!-- ========== EDIT THIS: Tool Description ========== -->
             <div class="chatooly-controls-header">
-                <p>Tool description goes here</p>
+                <p>Upload 3D models (GLB, GLTF, FBX) and create stunning renders with IBL lighting and turntable animations</p>
             </div>
             
             <div class="chatooly-controls-content">
@@ -46,11 +68,99 @@
 
                 <!-- ========== EDIT BELOW: Add Your Custom Tool Controls Here ========== -->
 
-                <!-- Example control group -->
-                <div class="chatooly-control-group">
+                <!-- Model Upload Section -->
+                <h3 class="section-header" id="model-header">
+                    ◼ Model Upload <span class="section-toggle">▼</span>
+                </h3>
+                <div id="model-section" class="section-content">
+                    <div class="chatooly-control-group">
+                        <label for="model-upload">Upload 3D Model</label>
+                        <input type="file" id="model-upload" accept=".glb,.gltf,.fbx">
+                        <p class="chatooly-text-small chatooly-text-muted">Supports: GLB, GLTF, FBX</p>
+                    </div>
                 </div>
 
-                <!-- Add more controls as needed -->
+                <!-- Transform Controls Section -->
+                <h3 class="section-header" id="transform-header">
+                    ◼ Transform <span class="section-toggle">▼</span>
+                </h3>
+                <div id="transform-section" class="section-content">
+                    <div class="chatooly-control-group">
+                        <label for="scale-slider">Scale: <span id="scale-value">1.0</span></label>
+                        <input type="range" id="scale-slider" min="0.1" max="5" step="0.1" value="1">
+                    </div>
+
+                    <div class="chatooly-control-group">
+                        <label for="position-x">Position X: <span id="position-x-value">0</span></label>
+                        <input type="range" id="position-x" min="-5" max="5" step="0.1" value="0">
+                    </div>
+
+                    <div class="chatooly-control-group">
+                        <label for="position-y">Position Y: <span id="position-y-value">0</span></label>
+                        <input type="range" id="position-y" min="-5" max="5" step="0.1" value="0">
+                    </div>
+
+                    <div class="chatooly-control-group">
+                        <label for="rotation-x">Rotation X: <span id="rotation-x-value">0°</span></label>
+                        <input type="range" id="rotation-x" min="0" max="360" step="1" value="0">
+                    </div>
+
+                    <div class="chatooly-control-group">
+                        <label for="rotation-y">Rotation Y: <span id="rotation-y-value">0°</span></label>
+                        <input type="range" id="rotation-y" min="0" max="360" step="1" value="0">
+                    </div>
+
+                    <div class="chatooly-control-group">
+                        <label for="rotation-z">Rotation Z: <span id="rotation-z-value">0°</span></label>
+                        <input type="range" id="rotation-z" min="0" max="360" step="1" value="0">
+                    </div>
+                </div>
+
+                <!-- HDRI Lighting Section -->
+                <h3 class="section-header" id="hdri-header">
+                    ◼ HDRI Lighting <span class="section-toggle">▼</span>
+                </h3>
+                <div id="hdri-section" class="section-content">
+                    <div class="chatooly-control-group">
+                        <label for="hdri-preset">HDRI Environment (2K Quality)</label>
+                        <select id="hdri-preset">
+                            <option value="studio">Studio Loft Hall</option>
+                            <option value="sunset">Venice Sunset</option>
+                            <option value="outdoor">Outdoor Cloudy</option>
+                            <option value="warehouse">Industrial Sunset</option>
+                            <option value="night">Moonlit Golf</option>
+                            <option value="autumn">Autumn Crossing</option>
+                            <option value="urban">Urban Alley</option>
+                        </select>
+                    </div>
+
+                    <div class="chatooly-control-group">
+                        <label for="hdri-intensity">Intensity: <span id="hdri-intensity-value">1.0</span></label>
+                        <input type="range" id="hdri-intensity" min="0" max="3" step="0.1" value="1">
+                    </div>
+
+                    <div class="chatooly-control-group">
+                        <label for="hdri-rotation">Rotation: <span id="hdri-rotation-value">0°</span></label>
+                        <input type="range" id="hdri-rotation" min="0" max="360" step="1" value="0">
+                    </div>
+                </div>
+
+                <!-- Animation Section -->
+                <h3 class="section-header" id="animation-header">
+                    ◼ Animation <span class="section-toggle">▼</span>
+                </h3>
+                <div id="animation-section" class="section-content">
+                    <div class="chatooly-control-group">
+                        <label>
+                            <input type="checkbox" id="turntable-toggle"> Enable Turntable
+                        </label>
+                    </div>
+
+                    <div class="chatooly-control-group">
+                        <label for="turntable-speed">Speed: <span id="turntable-speed-value">1.0</span></label>
+                        <input type="range" id="turntable-speed" min="0.1" max="3" step="0.1" value="1">
+                    </div>
+                </div>
 
                 <!-- ========== BACKGROUND CONTROLS ========== -->
                 <h3 class="section-header" id="background-header">

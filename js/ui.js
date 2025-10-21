@@ -14,20 +14,32 @@
 
 // Setup collapsible sections
 document.addEventListener('DOMContentLoaded', () => {
-    const backgroundHeader = document.getElementById('background-header');
-    const backgroundSection = document.getElementById('background-section');
+    // List of all collapsible sections
+    const sections = [
+        { header: 'model-header', content: 'model-section' },
+        { header: 'transform-header', content: 'transform-section' },
+        { header: 'hdri-header', content: 'hdri-section' },
+        { header: 'animation-header', content: 'animation-section' },
+        { header: 'background-header', content: 'background-section' }
+    ];
 
-    if (backgroundHeader && backgroundSection) {
-        backgroundHeader.style.cursor = 'pointer';
+    // Setup each section
+    sections.forEach(({ header, content }) => {
+        const headerEl = document.getElementById(header);
+        const contentEl = document.getElementById(content);
 
-        backgroundHeader.addEventListener('click', () => {
-            const isOpen = backgroundSection.style.display !== 'none';
-            backgroundSection.style.display = isOpen ? 'none' : 'block';
+        if (headerEl && contentEl) {
+            headerEl.style.cursor = 'pointer';
 
-            const toggle = backgroundHeader.querySelector('.section-toggle');
-            if (toggle) {
-                toggle.textContent = isOpen ? '▶' : '▼';
-            }
-        });
-    }
+            headerEl.addEventListener('click', () => {
+                const isOpen = contentEl.style.display !== 'none';
+                contentEl.style.display = isOpen ? 'none' : 'block';
+
+                const toggle = headerEl.querySelector('.section-toggle');
+                if (toggle) {
+                    toggle.textContent = isOpen ? '▶' : '▼';
+                }
+            });
+        }
+    });
 });

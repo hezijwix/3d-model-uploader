@@ -6,16 +6,16 @@
 // ========== EDIT THIS: Chatooly Configuration ==========
 window.ChatoolyConfig = {
     // REQUIRED: Your tool name
-    name: "",  // e.g., "my-awesome-tool"
+    name: "3d-model-uploader",
     
     // OPTIONAL: Export settings
     resolution: 2,              // 1, 2, or 4
     buttonPosition: "bottom-right",
     
     // REQUIRED FOR PUBLISHING: Tool metadata
-    category: "",     // Choose one: "generators", "visualizers", "editors", "utilities", "games", "art"
-    tags: [],         // Add relevant tags e.g., ["creative", "interactive", "design"]
-    description: "",  // Brief description of what your tool does
+    category: "visualizers",     // Choose one: "generators", "visualizers", "editors", "utilities", "games", "art"
+    tags: ["3d", "model", "viewer", "rendering", "gltf", "fbx", "hdri"],
+    description: "Upload and visualize 3D models with IBL lighting, turntable animation, and high-quality rendering",
     version: "1.0.0",
-    author: ""        // Your name or handle
+    author: "Your Name"  // TODO: Update with your name
 };
