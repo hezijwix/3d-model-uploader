@@ -23,11 +23,15 @@ class ModelViewer {
         this.turntableSpeed = 1.0;
         this.animationFrameId = null;
         
+        // Background image tracking
+        this.hasBackgroundImage = false;
+        
         // HDRI environment
         this.pmremGenerator = null;
         this.currentHDRI = null;
         this.hdriIntensity = 1.0;
         this.hdriRotation = 0;
+        this.hdriBackgroundVisible = false; // Off by default
         
         // Store original HDRI texture for proper rotation with lighting
         this.originalHDRITexture = null;
@@ -216,9 +220,18 @@ class ModelViewer {
         }
         const envMap = this.pmremGenerator.fromEquirectangular(texture).texture;
         
-        // Apply to scene (lighting + background)
+        // Apply to scene lighting (always active for IBL)
         this.scene.environment = envMap;
-        this.scene.background = envMap;
+        
+        // Apply to background only if checkbox is checked
+        if (this.hdriBackgroundVisible) {
+            this.scene.background = envMap;
+            this.renderer.setClearColor(0x000000, 1); // Opaque when HDRI showing
+        } else {
+            this.scene.background = null;
+            this.renderer.setClearColor(0x000000, 0); // Transparent when HDRI hidden
+        }
+        
         this.currentHDRI = envMap;
         
         // Rotate the cube map using environmentRotation/backgroundRotation (r162+)
@@ -234,7 +247,7 @@ class ModelViewer {
             this.applyEnvironmentToModel();
         }
         
-        console.log(`✓ Environment applied and rotated via cube map rotation`);
+        console.log(`✓ Environment applied (lighting always on, background: ${this.hdriBackgroundVisible ? 'visible' : 'hidden'})`);
     }
     
     updateHDRISettings(forceRegenerate = false) {
@@ -276,19 +289,27 @@ class ModelViewer {
         
         console.log(`  ✓ Updated ${materialsUpdated} materials with intensity`);
         
-        // Apply user's manual model rotations (independent of HDRI rotation)
+        // Apply user's manual model rotations in WORLD/GLOBAL space (independent of HDRI rotation)
+        // This ensures X, Y, Z rotations are ALWAYS around world axes, not local object axes
         if (this.modelContainer) {
             const userRotX = parseFloat(document.getElementById('rotation-x').value) * Math.PI / 180;
             const userRotY = parseFloat(document.getElementById('rotation-y').value) * Math.PI / 180;
             const userRotZ = parseFloat(document.getElementById('rotation-z').value) * Math.PI / 180;
             
-            // Reset and apply only user rotations in world space
-            this.modelContainer.rotation.set(0, 0, 0);
-            this.modelContainer.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), userRotY);
-            this.modelContainer.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), userRotX);
-            this.modelContainer.rotateOnWorldAxis(new THREE.Vector3(0, 0, 1), userRotZ);
+            // WORLD-SPACE ROTATION: Build rotation matrix from world axes
+            // This ensures rotations are ALWAYS around global X, Y, Z regardless of object orientation
+            const rotMatrix = new THREE.Matrix4();
+            const rotX = new THREE.Matrix4().makeRotationX(userRotX);
+            const rotY = new THREE.Matrix4().makeRotationY(userRotY);
+            const rotZ = new THREE.Matrix4().makeRotationZ(userRotZ);
             
-            console.log(`  ✓ Model rotation applied (independent of HDRI)`);
+            // Apply in order: Y (yaw) → X (pitch) → Z (roll) around WORLD axes
+            rotMatrix.multiply(rotY).multiply(rotX).multiply(rotZ);
+            
+            // Extract rotation from matrix (ignores any existing rotation)
+            this.modelContainer.rotation.setFromRotationMatrix(rotMatrix);
+            
+            console.log(`  ✓ Model rotation applied in WORLD SPACE (X:${userRotX.toFixed(2)}, Y:${userRotY.toFixed(2)}, Z:${userRotZ.toFixed(2)})`);
         }
         
         console.log(`✅ HDRI settings updated successfully`);
@@ -519,6 +540,24 @@ class ModelViewer {
             this.loadHDRI(e.target.value);
         });
         
+        document.getElementById('hdri-background-visible').addEventListener('change', (e) => {
+            this.hdriBackgroundVisible = e.target.checked;
+            console.log(`🎨 HDRI background visibility: ${this.hdriBackgroundVisible}`);
+            
+            // Update background immediately
+            if (this.hdriBackgroundVisible && this.currentHDRI) {
+                // Show HDRI background - make canvas OPAQUE to hide container background
+                this.scene.background = this.currentHDRI;
+                this.renderer.setClearColor(0x000000, 1); // Opaque
+                console.log('  ✓ HDRI showing, canvas opaque');
+            } else {
+                // Hide HDRI background - make canvas TRANSPARENT to show container background
+                this.scene.background = null;
+                this.renderer.setClearColor(0x000000, 0); // Transparent
+                console.log('  ✓ HDRI hidden, canvas transparent for background image');
+            }
+        });
+        
         document.getElementById('hdri-intensity').addEventListener('input', (e) => {
             this.hdriIntensity = parseFloat(e.target.value);
             document.getElementById('hdri-intensity-value').textContent = this.hdriIntensity.toFixed(1);
@@ -571,17 +610,37 @@ class ModelViewer {
         // For Three.js with WebGL, we use scene background color
         // The Chatooly background manager works behind the transparent canvas
         
+        // Debug: Check canvas setup
+        console.log('🔍 Canvas setup check:');
+        console.log('  - Canvas alpha:', this.renderer.getContextAttributes().alpha);
+        console.log('  - Canvas element:', this.canvas);
+        console.log('  - Chatooly backgroundManager:', !!window.Chatooly?.backgroundManager);
+        
         // Transparent background toggle
         const transparentBg = document.getElementById('transparent-bg');
         if (transparentBg) {
             transparentBg.addEventListener('change', (e) => {
                 if (e.target.checked) {
                     this.scene.background = null;
+                    this.renderer.setClearColor(0x000000, 0); // Transparent clear color
                     document.getElementById('bg-color-group').style.display = 'none';
+                    console.log('✓ Canvas transparent - background image/color will show');
                 } else {
-                    const bgColor = document.getElementById('bg-color').value;
-                    this.scene.background = new THREE.Color(bgColor);
-                    document.getElementById('bg-color-group').style.display = 'block';
+                    // If there's no background image, show solid color
+                    if (!this.hasBackgroundImage) {
+                        const bgColor = document.getElementById('bg-color').value;
+                        this.scene.background = new THREE.Color(bgColor);
+                        this.renderer.setClearColor(bgColor, 1); // Opaque clear color
+                        document.getElementById('bg-color-group').style.display = 'block';
+                    } else {
+                        // Has background image - keep canvas transparent
+                        this.scene.background = null;
+                        this.renderer.setClearColor(0x000000, 0);
+                        document.getElementById('bg-color-group').style.display = 'none';
+                        e.target.checked = true; // Force back to checked
+                        alert('Cannot disable transparency while background image is active. Please clear the image first.');
+                        console.warn('⚠️ Background image requires transparent canvas');
+                    }
                 }
             });
         }
@@ -591,7 +650,9 @@ class ModelViewer {
         if (bgColor) {
             bgColor.addEventListener('input', (e) => {
                 if (!transparentBg.checked) {
-                    this.scene.background = new THREE.Color(e.target.value);
+                    const color = e.target.value;
+                    this.scene.background = new THREE.Color(color);
+                    this.renderer.setClearColor(color, 1); // Update clear color
                 }
             });
         }
@@ -602,13 +663,56 @@ class ModelViewer {
             bgImage.addEventListener('change', async (e) => {
                 const file = e.target.files[0];
                 if (file && window.Chatooly && window.Chatooly.backgroundManager) {
-                    await window.Chatooly.backgroundManager.setBackgroundImage(file);
-                    document.getElementById('clear-bg-image').style.display = 'block';
-                    document.getElementById('bg-fit-group').style.display = 'block';
-                    
-                    // Make scene background transparent to show image behind
-                    this.scene.background = null;
-                    transparentBg.checked = true;
+                    try {
+                        await window.Chatooly.backgroundManager.setBackgroundImage(file);
+                        document.getElementById('clear-bg-image').style.display = 'block';
+                        document.getElementById('bg-fit-group').style.display = 'block';
+                        
+                        // Mark that we have a background image
+                        this.hasBackgroundImage = true;
+                        
+                        // CRITICAL: Make canvas transparent ONLY if HDRI background is off
+                        if (!this.hdriBackgroundVisible) {
+                            this.scene.background = null;
+                            this.renderer.setClearColor(0x000000, 0); // Alpha = 0 for transparency
+                        }
+                        // If HDRI background is on, it stays opaque and shows HDRI
+                        
+                        // Force transparent checkbox on
+                        transparentBg.checked = true;
+                        document.getElementById('bg-color-group').style.display = 'none';
+                        
+                        // CRITICAL: Apply background to container behind canvas
+                        const container = document.getElementById('chatooly-container');
+                        const bgCSS = window.Chatooly.backgroundManager.getBackgroundCSS();
+                        
+                        // Apply background to container
+                        container.style.background = bgCSS;
+                        
+                        // Ensure proper layering: canvas should be on top with transparency
+                        this.canvas.style.background = 'none'; // Remove any canvas background
+                        this.canvas.style.position = 'relative'; // Ensure positioned element
+                        this.canvas.style.zIndex = '1'; // Canvas on top
+                        
+                        console.log('🎨 Applied background CSS to container:', bgCSS);
+                        console.log('🎨 Canvas layering: background=none, z-index=1');
+                        
+                        console.log('✅ Background image uploaded successfully');
+                        console.log('✅ Canvas set to transparent mode');
+                        console.log('📊 Image should now be visible behind 3D model');
+                        
+                        // Debug: Check if background is actually applied
+                        setTimeout(() => {
+                            const containerStyle = window.getComputedStyle(container);
+                            const canvasStyle = window.getComputedStyle(this.canvas);
+                            console.log('🔍 Container background:', containerStyle.backgroundImage);
+                            console.log('🔍 Canvas background:', canvasStyle.background);
+                            console.log('🔍 Canvas clear color alpha:', this.renderer.getClearAlpha());
+                        }, 100);
+                    } catch (error) {
+                        console.error('❌ Failed to load background image:', error);
+                        alert('Failed to load background image');
+                    }
                 }
             });
         }
@@ -620,9 +724,28 @@ class ModelViewer {
                 if (window.Chatooly && window.Chatooly.backgroundManager) {
                     window.Chatooly.backgroundManager.clearBackgroundImage();
                 }
+                
+                // Remove background CSS from container and reset canvas styles
+                const container = document.getElementById('chatooly-container');
+                container.style.background = '';
+                this.canvas.style.background = '';
+                this.canvas.style.zIndex = '';
+                
                 clearBgImage.style.display = 'none';
                 document.getElementById('bg-fit-group').style.display = 'none';
                 document.getElementById('bg-image').value = '';
+                
+                // Mark that background image is removed
+                this.hasBackgroundImage = false;
+                
+                // Restore background color if not transparent
+                if (!transparentBg.checked) {
+                    const color = document.getElementById('bg-color').value;
+                    this.scene.background = new THREE.Color(color);
+                    this.renderer.setClearColor(color, 1);
+                }
+                
+                console.log('✓ Background image cleared, transparent checkbox unlocked');
             });
         }
         
@@ -632,6 +755,14 @@ class ModelViewer {
             bgFit.addEventListener('change', (e) => {
                 if (window.Chatooly && window.Chatooly.backgroundManager) {
                     window.Chatooly.backgroundManager.setFit(e.target.value);
+                    
+                    // Re-apply background CSS after changing fit mode
+                    const container = document.getElementById('chatooly-container');
+                    const bgCSS = window.Chatooly.backgroundManager.getBackgroundCSS();
+                    container.style.background = bgCSS;
+                    this.canvas.style.background = 'none'; // Keep canvas transparent
+                    this.canvas.style.zIndex = '1'; // Ensure canvas stays on top
+                    console.log('🎨 Background fit changed, CSS updated');
                 }
             });
         }
