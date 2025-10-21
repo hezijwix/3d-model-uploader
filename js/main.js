@@ -222,49 +222,39 @@ class ModelViewer {
         console.log(`  - Rotation: ${this.hdriRotation}° (${rotationRadians} rad)`);
         console.log(`  - Intensity: ${this.hdriIntensity}`);
         
-        // Try Three.js r162+ native rotation (may work in newer browsers)
+        // Use Three.js r162+ native rotation ONLY
+        // This properly rotates the environment without affecting the model/camera
         if (this.scene.environmentRotation) {
             this.scene.environmentRotation.set(0, rotationRadians, 0);
-            console.log(`  ✓ Environment rotation set (Three.js r162+)`);
+            console.log(`  ✓ Environment rotation set via scene.environmentRotation`);
+        } else {
+            console.warn(`  ⚠️ scene.environmentRotation not available - Three.js r162+ required for HDRI rotation`);
         }
         
         if (this.scene.backgroundRotation) {
             this.scene.backgroundRotation.set(0, rotationRadians, 0);
-            console.log(`  ✓ Background rotation set (Three.js r162+)`);
+            console.log(`  ✓ Background rotation set via scene.backgroundRotation`);
+        } else {
+            console.warn(`  ⚠️ scene.backgroundRotation not available`);
         }
         
-        // WORKAROUND: Rotate camera to make environment appear to rotate
-        // Then counter-rotate the model to keep it stationary
-        if (!this.cameraOriginalRotation) {
-            this.cameraOriginalRotation = this.camera.rotation.y;
-        }
+        // DO NOT ROTATE CAMERA - this was causing the model to rotate too
+        // Camera stays fixed, only environment rotates via native Three.js API
         
-        // Rotate camera (makes everything rotate including HDRI)
-        this.camera.rotation.y = this.cameraOriginalRotation - rotationRadians;
-        
-        // Counter-rotate the model container to keep the model stationary
-        // This cancels out the camera rotation for the model only
+        // Apply user's manual model rotations (independent of HDRI rotation)
         if (this.modelContainer) {
-            // Get current rotation values from sliders
             const userRotX = parseFloat(document.getElementById('rotation-x').value) * Math.PI / 180;
             const userRotY = parseFloat(document.getElementById('rotation-y').value) * Math.PI / 180;
             const userRotZ = parseFloat(document.getElementById('rotation-z').value) * Math.PI / 180;
             
-            // Reset and apply rotations in world space
+            // Reset and apply only user rotations in world space
             this.modelContainer.rotation.set(0, 0, 0);
-            
-            // First apply the HDRI counter-rotation to keep model stationary
-            this.modelContainer.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), rotationRadians);
-            
-            // Then apply user's manual rotations on top
             this.modelContainer.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), userRotY);
             this.modelContainer.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), userRotX);
             this.modelContainer.rotateOnWorldAxis(new THREE.Vector3(0, 0, 1), userRotZ);
             
-            console.log(`  ✓ Model counter-rotated to remain stationary`);
+            console.log(`  ✓ Model rotation applied (independent of HDRI)`);
         }
-        
-        console.log(`  ✓ Camera rotation adjusted for HDRI rotation effect`);
         
         // Update environment intensity on renderer (tone mapping exposure)
         this.renderer.toneMappingExposure = this.hdriIntensity;
