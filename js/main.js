@@ -222,17 +222,6 @@ class ModelViewer {
         console.log(`  - Rotation: ${this.hdriRotation}° (${rotationRadians} rad)`);
         console.log(`  - Intensity: ${this.hdriIntensity}`);
         
-        // SOLUTION: Manually rotate the entire scene around Y-axis to simulate HDRI rotation
-        // This is a workaround since Three.js r162 environmentRotation may not work on all browsers
-        // We rotate the scene in the opposite direction to make it appear the environment rotates
-        if (this.currentModel) {
-            // Store the model's original rotation
-            if (!this.modelOriginalRotation) {
-                this.modelOriginalRotation = this.modelContainer.rotation.y;
-            }
-            // We don't rotate the model container - HDRI rotation is visual only
-        }
-        
         // Try Three.js r162+ native rotation (may work in newer browsers)
         if (this.scene.environmentRotation) {
             this.scene.environmentRotation.set(0, rotationRadians, 0);
@@ -244,16 +233,37 @@ class ModelViewer {
             console.log(`  ✓ Background rotation set (Three.js r162+)`);
         }
         
-        // Alternative approach: Rotate camera in opposite direction
-        // This makes it look like the environment is rotating
-        // Store original camera position if not stored
+        // WORKAROUND: Rotate camera to make environment appear to rotate
+        // Then counter-rotate the model to keep it stationary
         if (!this.cameraOriginalRotation) {
             this.cameraOriginalRotation = this.camera.rotation.y;
         }
         
-        // Rotate camera view (opposite direction to simulate environment rotation)
-        // Note: This rotates the view, making the HDRI appear to rotate
+        // Rotate camera (makes everything rotate including HDRI)
         this.camera.rotation.y = this.cameraOriginalRotation - rotationRadians;
+        
+        // Counter-rotate the model container to keep the model stationary
+        // This cancels out the camera rotation for the model only
+        if (this.modelContainer) {
+            // Get current rotation values from sliders
+            const userRotX = parseFloat(document.getElementById('rotation-x').value) * Math.PI / 180;
+            const userRotY = parseFloat(document.getElementById('rotation-y').value) * Math.PI / 180;
+            const userRotZ = parseFloat(document.getElementById('rotation-z').value) * Math.PI / 180;
+            
+            // Reset and apply rotations in world space
+            this.modelContainer.rotation.set(0, 0, 0);
+            
+            // First apply the HDRI counter-rotation to keep model stationary
+            this.modelContainer.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), rotationRadians);
+            
+            // Then apply user's manual rotations on top
+            this.modelContainer.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), userRotY);
+            this.modelContainer.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), userRotX);
+            this.modelContainer.rotateOnWorldAxis(new THREE.Vector3(0, 0, 1), userRotZ);
+            
+            console.log(`  ✓ Model counter-rotated to remain stationary`);
+        }
+        
         console.log(`  ✓ Camera rotation adjusted for HDRI rotation effect`);
         
         // Update environment intensity on renderer (tone mapping exposure)
@@ -482,20 +492,23 @@ class ModelViewer {
         // Rotation controls (world/global space)
         document.getElementById('rotation-x').addEventListener('input', (e) => {
             const degrees = parseFloat(e.target.value);
-            this.updateWorldRotation();
             document.getElementById('rotation-x-value').textContent = degrees + '°';
+            // Update both model rotation and HDRI to maintain proper orientation
+            this.updateHDRISettings();
         });
         
         document.getElementById('rotation-y').addEventListener('input', (e) => {
             const degrees = parseFloat(e.target.value);
-            this.updateWorldRotation();
             document.getElementById('rotation-y-value').textContent = degrees + '°';
+            // Update both model rotation and HDRI to maintain proper orientation
+            this.updateHDRISettings();
         });
         
         document.getElementById('rotation-z').addEventListener('input', (e) => {
             const degrees = parseFloat(e.target.value);
-            this.updateWorldRotation();
             document.getElementById('rotation-z-value').textContent = degrees + '°';
+            // Update both model rotation and HDRI to maintain proper orientation
+            this.updateHDRISettings();
         });
         
         // HDRI controls
@@ -531,20 +544,11 @@ class ModelViewer {
         window.addEventListener('resize', () => this.onWindowResize());
     }
     
+    // This function is no longer needed - rotation is handled in updateHDRISettings
+    // Keeping it as a stub for compatibility
     updateWorldRotation() {
-        // Apply rotations in world space (global axes)
-        const rotX = parseFloat(document.getElementById('rotation-x').value) * Math.PI / 180;
-        const rotY = parseFloat(document.getElementById('rotation-y').value) * Math.PI / 180;
-        const rotZ = parseFloat(document.getElementById('rotation-z').value) * Math.PI / 180;
-        
-        // Reset rotation
-        this.modelContainer.rotation.set(0, 0, 0);
-        
-        // Apply rotations in world space: Y -> X -> Z order
-        // This gives predictable, global-axis rotations
-        this.modelContainer.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), rotY); // World Y
-        this.modelContainer.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), rotX); // World X
-        this.modelContainer.rotateOnWorldAxis(new THREE.Vector3(0, 0, 1), rotZ); // World Z
+        // Deprecated - now handled in updateHDRISettings to properly combine with HDRI rotation
+        this.updateHDRISettings();
     }
     
     setupBackgroundControls() {
