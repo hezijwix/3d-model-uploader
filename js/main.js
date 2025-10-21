@@ -208,47 +208,33 @@ class ModelViewer {
     }
     
     generateRotatedEnvironment(texture, rotationRadians) {
-        console.log(`🔄 Generating environment with rotation: ${(rotationRadians * 180 / Math.PI).toFixed(0)}°`);
+        console.log(`🔄 Generating environment (no texture rotation, using cube map rotation)`);
         
-        // Clone texture for rotation
-        const rotatedTexture = texture.clone();
-        rotatedTexture.mapping = THREE.EquirectangularReflectionMapping;
-        
-        // Apply rotation by adjusting texture transformation
-        // This rotates the HDRI BEFORE converting to cubemap
-        // So the lighting direction actually changes (like Cinema 4D/Blender)
-        rotatedTexture.center.set(0.5, 0.5);
-        rotatedTexture.rotation = -rotationRadians; // Negative for correct direction
-        rotatedTexture.wrapS = THREE.RepeatWrapping;
-        rotatedTexture.wrapT = THREE.ClampToEdgeWrapping;
-        rotatedTexture.needsUpdate = true;
-        
-        // Dispose old environment map
+        // Always generate PMREM from original equirectangular as-is
         if (this.currentHDRI) {
             this.currentHDRI.dispose();
         }
+        const envMap = this.pmremGenerator.fromEquirectangular(texture).texture;
         
-        // Generate PMREM cubemap from rotated equirectangular texture
-        const envMap = this.pmremGenerator.fromEquirectangular(rotatedTexture).texture;
-        
-        // Apply to scene (BOTH lighting and background)
+        // Apply to scene (lighting + background)
         this.scene.environment = envMap;
         this.scene.background = envMap;
-        
-        // Store reference
         this.currentHDRI = envMap;
         
-        console.log(`✓ Environment map regenerated with rotation`);
-        console.log(`  - Lighting direction updated (IBL)`);
-        console.log(`  - Background rotated`);
+        // Rotate the cube map using environmentRotation/backgroundRotation (r162+)
+        if (this.scene.environmentRotation) {
+            this.scene.environmentRotation.set(0, rotationRadians, 0);
+        }
+        if (this.scene.backgroundRotation) {
+            this.scene.backgroundRotation.set(0, rotationRadians, 0);
+        }
         
-        // Apply to existing model materials
+        // Apply to existing model materials (envMap comes from scene.environment)
         if (this.currentModel) {
             this.applyEnvironmentToModel();
         }
         
-        // Cleanup rotated texture (we only need the cubemap)
-        rotatedTexture.dispose();
+        console.log(`✓ Environment applied and rotated via cube map rotation`);
     }
     
     updateHDRISettings(forceRegenerate = false) {
@@ -258,11 +244,17 @@ class ModelViewer {
         console.log(`  - Rotation: ${this.hdriRotation}°`);
         console.log(`  - Intensity: ${this.hdriIntensity}`);
         
-        // REGENERATE environment map with rotation applied (like Cinema 4D/Blender)
-        // This ensures BOTH background AND lighting rotate together
+        // Preferred: rotate cube map via environmentRotation (fast, correct)
+        if (this.scene.environmentRotation) {
+            this.scene.environmentRotation.set(0, rotationRadians, 0);
+        }
+        if (this.scene.backgroundRotation) {
+            this.scene.backgroundRotation.set(0, rotationRadians, 0);
+        }
+        
+        // Optionally regenerate env (fallback, usually not needed now)
         if (this.originalHDRITexture && forceRegenerate) {
             this.generateRotatedEnvironment(this.originalHDRITexture, rotationRadians);
-            console.log(`  ✓ Environment regenerated with rotation - lighting updated!`);
         }
         
         // Update intensity (tone mapping exposure)
@@ -414,8 +406,8 @@ class ModelViewer {
                     const materials = Array.isArray(child.material) ? child.material : [child.material];
                     
                     materials.forEach(mat => {
-                        // Ensure material uses environment map for IBL
-                        mat.envMap = this.scene.environment;
+                        // IMPORTANT: Do NOT assign envMap directly.
+                        // Let Three.js use scene.environment so environmentRotation is respected.
                         mat.envMapIntensity = this.hdriIntensity;
                         
                         // Enable better PBR rendering
