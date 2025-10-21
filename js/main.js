@@ -6,6 +6,20 @@
  * and high-quality rendering for GLB, GLTF, and FBX formats.
  */
 
+// ========== CANVAS INITIALIZATION ==========
+// CRITICAL: Set canvas dimensions BEFORE Chatooly CDN initializes
+// This prevents the canvas from defaulting to 150x300px (browser default)
+(function() {
+    const canvas = document.getElementById('chatooly-canvas');
+    if (canvas) {
+        canvas.width = 1920;   // HD resolution width (1920x1080)
+        canvas.height = 1080;  // HD resolution height
+        console.log('✅ Canvas pre-initialized to Full HD: 1920x1080 (before Chatooly CDN)');
+    } else {
+        console.warn('⚠️ Canvas not found during pre-initialization. It will be initialized later.');
+    }
+})();
+
 class ModelViewer {
     constructor() {
         // Canvas and rendering
@@ -25,19 +39,27 @@ class ModelViewer {
         
         // Background image tracking
         this.hasBackgroundImage = false;
-        
+        this.backgroundTexture = null;
+
         // HDRI environment
         this.pmremGenerator = null;
         this.currentHDRI = null;
         this.hdriIntensity = 1.0;
         this.hdriRotation = 0;
         this.hdriBackgroundVisible = false; // Off by default
-        
+
         // Store original HDRI texture for proper rotation with lighting
         this.originalHDRITexture = null;
-        
+
         // Debounce timer for performance
         this.hdriRotationTimer = null;
+
+        // Sun light system (HDRI + Sun rig like C4D/Redshift)
+        this.sunLight = null;
+        this.sunDirection = new THREE.Vector3(0, 1, 0); // Default: top-down
+        this.sunIntensity = 2.0;
+        this.sunEnabled = true;
+        this.shadowQuality = 2048; // Shadow map resolution
         
         // HDRI presets (Premium quality from Poly Haven - 2K resolution for better quality)
         this.hdriPresets = {
@@ -54,11 +76,13 @@ class ModelViewer {
         this.gltfLoader = null;
         this.fbxLoader = null;
         this.rgbeLoader = null;
+        this.textureLoader = null;
         
         this.init();
     }
     
     init() {
+        this.setupCanvasDimensions();
         this.setupScene();
         this.setupCamera();
         this.setupRenderer();
@@ -67,10 +91,17 @@ class ModelViewer {
         this.loadDefaultHDRI();
         this.setupEventListeners();
         this.animate();
-        
+
         console.log('3D Model Viewer initialized');
     }
-    
+
+    setupCanvasDimensions() {
+        // Set canvas to Full HD (1920x1080) by default for high quality
+        this.canvas.width = 1920;
+        this.canvas.height = 1080;
+        console.log('Canvas dimensions set to Full HD: 1920x1080');
+    }
+
     setupScene() {
         this.scene = new THREE.Scene();
         this.scene.background = null; // Transparent by default
@@ -87,8 +118,8 @@ class ModelViewer {
     setupCamera() {
         // Fixed front perspective camera
         // Use canvas internal dimensions, not CSS dimensions
-        const width = this.canvas.width || 800;
-        const height = this.canvas.height || 600;
+        const width = this.canvas.width || 1920;
+        const height = this.canvas.height || 1080;
         const aspect = width / height;
         
         this.camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 1000);
@@ -108,8 +139,8 @@ class ModelViewer {
         });
         
         // Use canvas internal dimensions
-        const width = this.canvas.width || 800;
-        const height = this.canvas.height || 600;
+        const width = this.canvas.width || 1920;
+        const height = this.canvas.height || 1080;
         this.renderer.setSize(width, height, false);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Cap at 2x for performance
         
@@ -121,8 +152,9 @@ class ModelViewer {
         // Note: physicallyCorrectLights is deprecated in r162+, now enabled by default
         // this.renderer.physicallyCorrectLights = true;
         
-        // Enable shadows for better quality (can be toggled later)
-        this.renderer.shadowMap.enabled = false;
+        // Enable shadows for HDRI + Sun rig system
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Soft shadows
         
         // Setup PMREMGenerator for high-quality IBL
         this.pmremGenerator = new THREE.PMREMGenerator(this.renderer);
@@ -132,36 +164,186 @@ class ModelViewer {
     }
     
     setupLights() {
-        // Ambient light as fallback
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+        // Ambient light as fallback (reduced since we have IBL + Sun)
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.1);
         this.scene.add(ambientLight);
-        
-        // Key light
-        const keyLight = new THREE.DirectionalLight(0xffffff, 0.5);
-        keyLight.position.set(5, 5, 5);
-        this.scene.add(keyLight);
-        
-        // Fill light
-        const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
-        fillLight.position.set(-5, 0, -5);
-        this.scene.add(fillLight);
+
+        // Sun light (HDRI-based directional light with shadows)
+        this.sunLight = new THREE.DirectionalLight(0xffffff, this.sunIntensity);
+        this.sunLight.castShadow = true;
+
+        // Configure shadow camera for directional light
+        this.sunLight.shadow.mapSize.width = this.shadowQuality;
+        this.sunLight.shadow.mapSize.height = this.shadowQuality;
+        this.sunLight.shadow.camera.near = 0.1;
+        this.sunLight.shadow.camera.far = 50;
+        this.sunLight.shadow.camera.left = -10;
+        this.sunLight.shadow.camera.right = 10;
+        this.sunLight.shadow.camera.top = 10;
+        this.sunLight.shadow.camera.bottom = -10;
+        this.sunLight.shadow.bias = -0.0001; // Prevent shadow acne
+        this.sunLight.shadow.radius = 4; // Soft shadow edges
+
+        // Position sun light (will be updated when HDRI is analyzed)
+        this.sunLight.position.set(5, 10, 5);
+        this.sunLight.target.position.set(0, 0, 0);
+
+        this.scene.add(this.sunLight);
+        this.scene.add(this.sunLight.target);
+
+        console.log('✅ Sun light system initialized with shadows');
     }
     
     setupLoaders() {
         // GLTF/GLB Loader (r162+ uses window.GLTFLoader)
         this.gltfLoader = new window.GLTFLoader();
-        
+
         // FBX Loader (r162+ uses window.FBXLoader)
         this.fbxLoader = new window.FBXLoader();
-        
+
         // RGBE Loader for HDR images (r162+ uses window.RGBELoader)
         this.rgbeLoader = new window.RGBELoader();
         // Use HalfFloatType for better performance with HDR in r162+
         this.rgbeLoader.setDataType(THREE.HalfFloatType);
+
+        // Texture Loader for background images
+        this.textureLoader = new THREE.TextureLoader();
     }
     
     loadDefaultHDRI() {
         this.loadHDRI('studio');
+    }
+
+    /**
+     * Analyze HDRI texture to find brightest point (sun position)
+     * This mimics Cinema 4D/Redshift HDRI + Sun rig behavior
+     */
+    analyzeHDRIBrightestPoint(texture) {
+        console.log('🔍 Analyzing HDRI for brightest point (sun extraction)...');
+
+        // Create a temporary canvas to read pixel data
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Get texture image (we need to render it to canvas for pixel analysis)
+        // For HDR textures, we'll sample at lower resolution for performance
+        const sampleWidth = 512;
+        const sampleHeight = 256;
+        canvas.width = sampleWidth;
+        canvas.height = sampleHeight;
+
+        // Create a temporary scene to render the HDRI texture
+        const tempScene = new THREE.Scene();
+        const tempCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+        // Create a plane with the HDRI texture
+        const geometry = new THREE.PlaneGeometry(2, 2);
+        const material = new THREE.MeshBasicMaterial({
+            map: texture,
+            toneMapped: false // Important: we want raw HDR values
+        });
+        const plane = new THREE.Mesh(geometry, material);
+        tempScene.add(plane);
+
+        // Render to a render target that we can read
+        const renderTarget = new THREE.WebGLRenderTarget(sampleWidth, sampleHeight, {
+            type: THREE.FloatType, // Use float to preserve HDR values
+            format: THREE.RGBAFormat
+        });
+
+        this.renderer.setRenderTarget(renderTarget);
+        this.renderer.render(tempScene, tempCamera);
+
+        // Read pixels
+        const pixelBuffer = new Float32Array(sampleWidth * sampleHeight * 4);
+        this.renderer.readRenderTargetPixels(renderTarget, 0, 0, sampleWidth, sampleHeight, pixelBuffer);
+
+        // Reset render target
+        this.renderer.setRenderTarget(null);
+
+        // Find brightest pixel
+        let maxLuminance = 0;
+        let brightestU = 0.5;
+        let brightestV = 0.5;
+
+        for (let y = 0; y < sampleHeight; y++) {
+            for (let x = 0; x < sampleWidth; x++) {
+                const idx = (y * sampleWidth + x) * 4;
+                const r = pixelBuffer[idx];
+                const g = pixelBuffer[idx + 1];
+                const b = pixelBuffer[idx + 2];
+
+                // Calculate luminance (Rec. 709)
+                const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+                if (luminance > maxLuminance) {
+                    maxLuminance = luminance;
+                    brightestU = x / sampleWidth;
+                    brightestV = 1.0 - (y / sampleHeight); // Flip V coordinate
+                }
+            }
+        }
+
+        console.log(`  ✓ Brightest point found: UV(${brightestU.toFixed(3)}, ${brightestV.toFixed(3)}), Luminance: ${maxLuminance.toFixed(2)}`);
+
+        // Convert equirectangular UV to 3D direction
+        const direction = this.equirectUVToDirection(brightestU, brightestV);
+
+        console.log(`  ✓ Sun direction: (${direction.x.toFixed(3)}, ${direction.y.toFixed(3)}, ${direction.z.toFixed(3)})`);
+
+        // Cleanup
+        renderTarget.dispose();
+        geometry.dispose();
+        material.dispose();
+
+        return direction;
+    }
+
+    /**
+     * Convert equirectangular UV coordinates to 3D direction vector
+     * @param {number} u - Horizontal coordinate (0 to 1)
+     * @param {number} v - Vertical coordinate (0 to 1)
+     * @returns {THREE.Vector3} - Normalized direction vector
+     */
+    equirectUVToDirection(u, v) {
+        // Convert UV to spherical coordinates
+        const phi = (u - 0.5) * Math.PI * 2; // Longitude: -π to π
+        const theta = (v - 0.5) * Math.PI;    // Latitude: -π/2 to π/2
+
+        // Convert spherical to Cartesian coordinates
+        const x = Math.cos(theta) * Math.sin(phi);
+        const y = Math.sin(theta);
+        const z = Math.cos(theta) * Math.cos(phi);
+
+        return new THREE.Vector3(x, y, z).normalize();
+    }
+
+    /**
+     * Update sun light position based on detected direction and current HDRI rotation
+     */
+    updateSunLightPosition() {
+        if (!this.sunLight || !this.sunEnabled) return;
+
+        // Apply HDRI rotation to sun direction
+        const rotationRadians = this.hdriRotation * Math.PI / 180;
+        const rotatedDirection = this.sunDirection.clone();
+        rotatedDirection.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotationRadians);
+
+        // Position sun light far from origin in the detected direction
+        const distance = 20; // Far enough to act as directional light
+        this.sunLight.position.copy(rotatedDirection.multiplyScalar(distance));
+
+        // Always point at scene center
+        this.sunLight.target.position.set(0, 0, 0);
+        this.sunLight.target.updateMatrixWorld();
+
+        // Update intensity
+        this.sunLight.intensity = this.sunIntensity;
+
+        // Show/hide based on enabled state
+        this.sunLight.visible = this.sunEnabled;
+
+        console.log(`  ✓ Sun light updated: position(${this.sunLight.position.x.toFixed(2)}, ${this.sunLight.position.y.toFixed(2)}, ${this.sunLight.position.z.toFixed(2)})`);
     }
     
     loadHDRI(presetName) {
@@ -188,15 +370,21 @@ class ModelViewer {
                 
                 console.log(`✓ Original HDRI texture stored for rotation`);
                 
+                // Analyze HDRI to find brightest point (sun extraction)
+                this.sunDirection = this.analyzeHDRIBrightestPoint(texture);
+
                 // Generate environment with current rotation
                 this.generateRotatedEnvironment(texture, this.hdriRotation * Math.PI / 180);
-                
+
+                // Update sun light position based on detected direction
+                this.updateSunLightPosition();
+
                 // If model exists, reapply environment to materials
                 if (this.currentModel) {
                     this.applyEnvironmentToModel();
                 }
-                
-                console.log(`✅ HDRI fully loaded: ${presetName} (2K quality)`);
+
+                console.log(`✅ HDRI fully loaded: ${presetName} (2K quality) with sun extraction`);
             },
             (progress) => {
                 if (progress.total > 0) {
@@ -212,7 +400,7 @@ class ModelViewer {
     }
     
     generateRotatedEnvironment(texture, rotationRadians) {
-        console.log(`🔄 Generating environment (no texture rotation, using cube map rotation)`);
+        console.log(`🔄 Generating environment with rotation: ${(rotationRadians * 180 / Math.PI).toFixed(1)}°`);
         
         // Always generate PMREM from original equirectangular as-is
         if (this.currentHDRI) {
@@ -223,15 +411,7 @@ class ModelViewer {
         // Apply to scene lighting (always active for IBL)
         this.scene.environment = envMap;
         
-        // Apply to background only if checkbox is checked
-        if (this.hdriBackgroundVisible) {
-            this.scene.background = envMap;
-            this.renderer.setClearColor(0x000000, 1); // Opaque when HDRI showing
-        } else {
-            this.scene.background = null;
-            this.renderer.setClearColor(0x000000, 0); // Transparent when HDRI hidden
-        }
-        
+        // Store the HDRI texture
         this.currentHDRI = envMap;
         
         // Rotate the cube map using environmentRotation/backgroundRotation (r162+)
@@ -242,12 +422,15 @@ class ModelViewer {
             this.scene.backgroundRotation.set(0, rotationRadians, 0);
         }
         
+        // Use centralized background management for scene.background
+        this.updateCanvasBackground();
+        
         // Apply to existing model materials (envMap comes from scene.environment)
         if (this.currentModel) {
             this.applyEnvironmentToModel();
         }
         
-        console.log(`✓ Environment applied (lighting always on, background: ${this.hdriBackgroundVisible ? 'visible' : 'hidden'})`);
+        console.log(`✓ Environment applied (lighting always on)`);
     }
     
     updateHDRISettings(forceRegenerate = false) {
@@ -269,10 +452,16 @@ class ModelViewer {
         if (this.originalHDRITexture && forceRegenerate) {
             this.generateRotatedEnvironment(this.originalHDRITexture, rotationRadians);
         }
-        
-        // Update intensity (tone mapping exposure)
-        this.renderer.toneMappingExposure = this.hdriIntensity;
-        console.log(`  ✓ Tone mapping exposure: ${this.renderer.toneMappingExposure}`);
+
+        // Update tone mapping settings ONLY if HDRI background is visible
+        // Otherwise preserve settings from updateCanvasBackground()
+        if (this.hdriBackgroundVisible) {
+            this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            this.renderer.toneMappingExposure = this.hdriIntensity;
+            console.log(`  ✓ Tone mapping: ACES, exposure: ${this.hdriIntensity} (HDRI visible)`);
+        } else {
+            console.log(`  ✓ Tone mapping preserved (HDRI not visible, using background mode setting)`);
+        }
         
         // Update all material env map intensities
         let materialsUpdated = 0;
@@ -289,29 +478,32 @@ class ModelViewer {
         
         console.log(`  ✓ Updated ${materialsUpdated} materials with intensity`);
         
+        // Update sun light position to match HDRI rotation
+        this.updateSunLightPosition();
+
         // Apply user's manual model rotations in WORLD/GLOBAL space (independent of HDRI rotation)
         // This ensures X, Y, Z rotations are ALWAYS around world axes, not local object axes
         if (this.modelContainer) {
             const userRotX = parseFloat(document.getElementById('rotation-x').value) * Math.PI / 180;
             const userRotY = parseFloat(document.getElementById('rotation-y').value) * Math.PI / 180;
             const userRotZ = parseFloat(document.getElementById('rotation-z').value) * Math.PI / 180;
-            
+
             // WORLD-SPACE ROTATION: Build rotation matrix from world axes
             // This ensures rotations are ALWAYS around global X, Y, Z regardless of object orientation
             const rotMatrix = new THREE.Matrix4();
             const rotX = new THREE.Matrix4().makeRotationX(userRotX);
             const rotY = new THREE.Matrix4().makeRotationY(userRotY);
             const rotZ = new THREE.Matrix4().makeRotationZ(userRotZ);
-            
+
             // Apply in order: Y (yaw) → X (pitch) → Z (roll) around WORLD axes
             rotMatrix.multiply(rotY).multiply(rotX).multiply(rotZ);
-            
+
             // Extract rotation from matrix (ignores any existing rotation)
             this.modelContainer.rotation.setFromRotationMatrix(rotMatrix);
-            
+
             console.log(`  ✓ Model rotation applied in WORLD SPACE (X:${userRotX.toFixed(2)}, Y:${userRotY.toFixed(2)}, Z:${userRotZ.toFixed(2)})`);
         }
-        
+
         console.log(`✅ HDRI settings updated successfully`);
     }
     
@@ -368,20 +560,42 @@ class ModelViewer {
     
     processLoadedModel() {
         if (!this.currentModel) return;
-        
+
         // Add model to container
         this.modelContainer.add(this.currentModel);
-        
+
         // Auto-center model
         this.centerModel();
-        
+
         // Auto-scale model to fit canvas
         this.autoScaleModel();
-        
+
+        // Enable shadows for realistic rendering
+        this.enableModelShadows();
+
         // Apply environment map to all materials
         this.applyEnvironmentToModel();
-        
-        console.log('Model processed and centered');
+
+        console.log('Model processed and centered with shadows enabled');
+    }
+
+    /**
+     * Enable shadow casting and receiving for all meshes in the model
+     * This is essential for realistic self-shadowing with the sun light
+     */
+    enableModelShadows() {
+        if (!this.currentModel) return;
+
+        let meshCount = 0;
+        this.currentModel.traverse((child) => {
+            if (child.isMesh) {
+                child.castShadow = true;    // Model casts shadows
+                child.receiveShadow = true; // Model receives shadows (self-shadowing)
+                meshCount++;
+            }
+        });
+
+        console.log(`  ✓ Enabled shadows for ${meshCount} meshes (cast + receive for self-shadowing)`);
     }
     
     centerModel() {
@@ -542,20 +756,10 @@ class ModelViewer {
         
         document.getElementById('hdri-background-visible').addEventListener('change', (e) => {
             this.hdriBackgroundVisible = e.target.checked;
-            console.log(`🎨 HDRI background visibility: ${this.hdriBackgroundVisible}`);
+            console.log(`🎨 HDRI background visibility toggled: ${this.hdriBackgroundVisible}`);
             
-            // Update background immediately
-            if (this.hdriBackgroundVisible && this.currentHDRI) {
-                // Show HDRI background - make canvas OPAQUE to hide container background
-                this.scene.background = this.currentHDRI;
-                this.renderer.setClearColor(0x000000, 1); // Opaque
-                console.log('  ✓ HDRI showing, canvas opaque');
-            } else {
-                // Hide HDRI background - make canvas TRANSPARENT to show container background
-                this.scene.background = null;
-                this.renderer.setClearColor(0x000000, 0); // Transparent
-                console.log('  ✓ HDRI hidden, canvas transparent for background image');
-            }
+            // Use centralized background management
+            this.updateCanvasBackground();
         });
         
         document.getElementById('hdri-intensity').addEventListener('input', (e) => {
@@ -568,21 +772,49 @@ class ModelViewer {
             this.hdriRotation = parseFloat(e.target.value);
             document.getElementById('hdri-rotation-value').textContent = this.hdriRotation + '°';
             console.log(`🔄 User rotated HDRI to: ${this.hdriRotation}°`);
-            
+
             // Debounce for performance (regenerating PMREM is expensive)
             // Update preview immediately with intensity, regenerate after user stops
             this.updateHDRISettings(false); // Update intensity immediately
-            
+
             // Clear existing timer
             if (this.hdriRotationTimer) {
                 clearTimeout(this.hdriRotationTimer);
             }
-            
+
             // Regenerate environment after 300ms of no input (user stopped moving slider)
             this.hdriRotationTimer = setTimeout(() => {
                 console.log(`⚡ Regenerating environment with rotation for proper IBL...`);
                 this.updateHDRISettings(true); // Force regenerate
             }, 300);
+        });
+
+        // Sun light controls
+        document.getElementById('sun-enabled').addEventListener('change', (e) => {
+            this.sunEnabled = e.target.checked;
+            console.log(`☀️ Sun light ${this.sunEnabled ? 'enabled' : 'disabled'}`);
+            this.updateSunLightPosition();
+        });
+
+        document.getElementById('sun-intensity').addEventListener('input', (e) => {
+            this.sunIntensity = parseFloat(e.target.value);
+            document.getElementById('sun-intensity-value').textContent = this.sunIntensity.toFixed(1);
+            console.log(`☀️ Sun intensity: ${this.sunIntensity}`);
+            this.updateSunLightPosition();
+        });
+
+        document.getElementById('shadow-quality').addEventListener('change', (e) => {
+            this.shadowQuality = parseInt(e.target.value);
+            console.log(`🎨 Shadow quality changed to: ${this.shadowQuality}x${this.shadowQuality}`);
+
+            // Update shadow map resolution
+            if (this.sunLight) {
+                this.sunLight.shadow.mapSize.width = this.shadowQuality;
+                this.sunLight.shadow.mapSize.height = this.shadowQuality;
+                this.sunLight.shadow.map?.dispose();
+                this.sunLight.shadow.map = null;
+                console.log(`  ✓ Shadow map updated to ${this.shadowQuality}x${this.shadowQuality}`);
+            }
         });
         
         // Turntable animation
@@ -606,201 +838,216 @@ class ModelViewer {
         this.updateHDRISettings();
     }
     
-    setupBackgroundControls() {
-        // For Three.js with WebGL, we use scene background color
-        // The Chatooly background manager works behind the transparent canvas
-        
-        // Debug: Check canvas setup
-        console.log('🔍 Canvas setup check:');
-        console.log('  - Canvas alpha:', this.renderer.getContextAttributes().alpha);
-        console.log('  - Canvas element:', this.canvas);
-        console.log('  - Chatooly backgroundManager:', !!window.Chatooly?.backgroundManager);
-        
-        // Transparent background toggle
+    // === CORE BACKGROUND UPDATE METHOD ===
+    // Single source of truth for managing canvas transparency and backgrounds
+    updateCanvasBackground() {
+        // Priority order:
+        // 1. HDRI background (if visible) - scene.background shows HDRI
+        // 2. Background image texture - scene.background shows texture
+        // 3. Transparent mode - scene.background null, canvas transparent
+        // 4. Solid color - scene.background shows color
+
         const transparentBg = document.getElementById('transparent-bg');
+        const bgColor = document.getElementById('bg-color');
+
+        if (this.hdriBackgroundVisible && this.currentHDRI) {
+            // HDRI showing - use HDRI texture as background
+            this.scene.background = this.currentHDRI;
+            this.renderer.setClearColor(0x000000, 1);
+            // Use ACES tone mapping for HDR content
+            this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            this.renderer.toneMappingExposure = this.hdriIntensity;
+            console.log('  ✓ Background mode: HDRI (ACES tone mapping, exposure:', this.hdriIntensity, ')');
+        } else if (this.hasBackgroundImage && this.backgroundTexture) {
+            // Background image - use loaded texture as scene background
+            this.scene.background = this.backgroundTexture;
+            this.renderer.setClearColor(0x000000, 1);
+            // Disable tone mapping for true colors (no tone curve applied)
+            this.renderer.toneMapping = THREE.NoToneMapping;
+            this.renderer.toneMappingExposure = 1.0;
+            console.log('  ✓ Background mode: Image (no tone mapping, true colors)');
+        } else if (transparentBg && transparentBg.checked) {
+            // Transparent mode - no background
+            this.scene.background = null;
+            this.renderer.setClearColor(0x000000, 0);
+            // Disable tone mapping for neutral rendering
+            this.renderer.toneMapping = THREE.NoToneMapping;
+            this.renderer.toneMappingExposure = 1.0;
+            console.log('  ✓ Background mode: Transparent (no tone mapping)');
+        } else {
+            // Solid color mode
+            const color = bgColor ? bgColor.value : '#CCFD50';
+            this.scene.background = new THREE.Color(color);
+            this.renderer.setClearColor(color, 1);
+            // Disable tone mapping for exact color matching
+            this.renderer.toneMapping = THREE.NoToneMapping;
+            this.renderer.toneMappingExposure = 1.0;
+            console.log('  ✓ Background mode: Solid color (no tone mapping, exact color)');
+        }
+
+        // Update UI visibility
+        const bgColorGroup = document.getElementById('bg-color-group');
+        if (bgColorGroup) {
+            const showColorPicker = !transparentBg?.checked && !this.hasBackgroundImage && !this.hdriBackgroundVisible;
+            bgColorGroup.style.display = showColorPicker ? 'block' : 'none';
+        }
+    }
+    
+    setupBackgroundControls() {
+        console.log('🔍 Initializing background controls');
+        
+        // Get all control elements
+        const transparentBg = document.getElementById('transparent-bg');
+        const bgColor = document.getElementById('bg-color');
+        const bgImage = document.getElementById('bg-image');
+        const clearBgImage = document.getElementById('clear-bg-image');
+        const bgFit = document.getElementById('bg-fit');
+        
+        // === TRANSPARENT BACKGROUND TOGGLE ===
         if (transparentBg) {
-            transparentBg.addEventListener('change', (e) => {
-                if (e.target.checked) {
-                    this.scene.background = null;
-                    this.renderer.setClearColor(0x000000, 0); // Transparent clear color
-                    document.getElementById('bg-color-group').style.display = 'none';
-                    console.log('✓ Canvas transparent - background image/color will show');
-                } else {
-                    // If there's no background image, show solid color
-                    if (!this.hasBackgroundImage) {
-                        const bgColor = document.getElementById('bg-color').value;
-                        this.scene.background = new THREE.Color(bgColor);
-                        this.renderer.setClearColor(bgColor, 1); // Opaque clear color
-                        document.getElementById('bg-color-group').style.display = 'block';
-                    } else {
-                        // Has background image - keep canvas transparent
-                        this.scene.background = null;
-                        this.renderer.setClearColor(0x000000, 0);
-                        document.getElementById('bg-color-group').style.display = 'none';
-                        e.target.checked = true; // Force back to checked
-                        alert('Cannot disable transparency while background image is active. Please clear the image first.');
-                        console.warn('⚠️ Background image requires transparent canvas');
-                    }
-                }
+            transparentBg.addEventListener('change', () => {
+                console.log('🎨 Transparent background toggled:', transparentBg.checked);
+                this.updateCanvasBackground();
             });
         }
         
-        // Background color
-        const bgColor = document.getElementById('bg-color');
+        // === BACKGROUND COLOR ===
         if (bgColor) {
             bgColor.addEventListener('input', (e) => {
-                if (!transparentBg.checked) {
-                    const color = e.target.value;
-                    this.scene.background = new THREE.Color(color);
-                    this.renderer.setClearColor(color, 1); // Update clear color
-                }
+                console.log('🎨 Background color changed:', e.target.value);
+                this.updateCanvasBackground();
             });
         }
         
-        // Background image - use Chatooly background manager
-        const bgImage = document.getElementById('bg-image');
+        // === BACKGROUND IMAGE UPLOAD ===
         if (bgImage) {
-            bgImage.addEventListener('change', async (e) => {
+            bgImage.addEventListener('change', (e) => {
                 const file = e.target.files[0];
-                if (file && window.Chatooly && window.Chatooly.backgroundManager) {
-                    try {
-                        await window.Chatooly.backgroundManager.setBackgroundImage(file);
-                        document.getElementById('clear-bg-image').style.display = 'block';
-                        document.getElementById('bg-fit-group').style.display = 'block';
-                        
-                        // Mark that we have a background image
-                        this.hasBackgroundImage = true;
-                        
-                        // CRITICAL: Make canvas transparent ONLY if HDRI background is off
-                        if (!this.hdriBackgroundVisible) {
-                            this.scene.background = null;
-                            this.renderer.setClearColor(0x000000, 0); // Alpha = 0 for transparency
+                if (!file) return;
+
+                try {
+                    console.log('🎨 Loading background image as Three.js texture...');
+
+                    // Create a URL for the file
+                    const imageURL = URL.createObjectURL(file);
+
+                    // Load as Three.js texture
+                    this.textureLoader.load(
+                        imageURL,
+                        (texture) => {
+                            console.log('✅ Background texture loaded successfully');
+
+                            // Dispose of old texture if it exists
+                            if (this.backgroundTexture) {
+                                this.backgroundTexture.dispose();
+                            }
+
+                            // Store the new texture
+                            this.backgroundTexture = texture;
+                            this.hasBackgroundImage = true;
+
+                            // Update canvas background to use texture
+                            this.updateCanvasBackground();
+
+                            // Show clear button and fit controls
+                            if (clearBgImage) clearBgImage.style.display = 'block';
+                            if (document.getElementById('bg-fit-group')) {
+                                document.getElementById('bg-fit-group').style.display = 'block';
+                            }
+
+                            // Clean up the object URL
+                            URL.revokeObjectURL(imageURL);
+                        },
+                        undefined,
+                        (error) => {
+                            console.error('❌ Failed to load background texture:', error);
+                            alert('Failed to load background image');
+                            URL.revokeObjectURL(imageURL);
                         }
-                        // If HDRI background is on, it stays opaque and shows HDRI
-                        
-                        // Force transparent checkbox on
-                        transparentBg.checked = true;
-                        document.getElementById('bg-color-group').style.display = 'none';
-                        
-                        // CRITICAL: Apply background to container behind canvas
-                        const container = document.getElementById('chatooly-container');
-                        const bgCSS = window.Chatooly.backgroundManager.getBackgroundCSS();
-                        
-                        // Apply background to container
-                        container.style.background = bgCSS;
-                        
-                        // Ensure proper layering: canvas should be on top with transparency
-                        this.canvas.style.background = 'none'; // Remove any canvas background
-                        this.canvas.style.position = 'relative'; // Ensure positioned element
-                        this.canvas.style.zIndex = '1'; // Canvas on top
-                        
-                        console.log('🎨 Applied background CSS to container:', bgCSS);
-                        console.log('🎨 Canvas layering: background=none, z-index=1');
-                        
-                        console.log('✅ Background image uploaded successfully');
-                        console.log('✅ Canvas set to transparent mode');
-                        console.log('📊 Image should now be visible behind 3D model');
-                        
-                        // Debug: Check if background is actually applied
-                        setTimeout(() => {
-                            const containerStyle = window.getComputedStyle(container);
-                            const canvasStyle = window.getComputedStyle(this.canvas);
-                            console.log('🔍 Container background:', containerStyle.backgroundImage);
-                            console.log('🔍 Canvas background:', canvasStyle.background);
-                            console.log('🔍 Canvas clear color alpha:', this.renderer.getClearAlpha());
-                        }, 100);
-                    } catch (error) {
-                        console.error('❌ Failed to load background image:', error);
-                        alert('Failed to load background image');
-                    }
+                    );
+                } catch (error) {
+                    console.error('❌ Failed to process background image:', error);
+                    alert('Failed to load background image');
                 }
             });
         }
         
-        // Clear background image
-        const clearBgImage = document.getElementById('clear-bg-image');
+        // === CLEAR BACKGROUND IMAGE ===
         if (clearBgImage) {
             clearBgImage.addEventListener('click', () => {
-                if (window.Chatooly && window.Chatooly.backgroundManager) {
-                    window.Chatooly.backgroundManager.clearBackgroundImage();
+                console.log('🎨 Clearing background image');
+
+                // Dispose of texture properly
+                if (this.backgroundTexture) {
+                    this.backgroundTexture.dispose();
+                    this.backgroundTexture = null;
                 }
-                
-                // Remove background CSS from container and reset canvas styles
-                const container = document.getElementById('chatooly-container');
-                container.style.background = '';
-                this.canvas.style.background = '';
-                this.canvas.style.zIndex = '';
-                
-                clearBgImage.style.display = 'none';
-                document.getElementById('bg-fit-group').style.display = 'none';
-                document.getElementById('bg-image').value = '';
-                
-                // Mark that background image is removed
+
+                // Mark as no longer having background image
                 this.hasBackgroundImage = false;
-                
-                // Restore background color if not transparent
-                if (!transparentBg.checked) {
-                    const color = document.getElementById('bg-color').value;
-                    this.scene.background = new THREE.Color(color);
-                    this.renderer.setClearColor(color, 1);
+
+                // Update canvas background (will revert to solid color or transparent)
+                this.updateCanvasBackground();
+
+                // Hide controls
+                clearBgImage.style.display = 'none';
+                if (document.getElementById('bg-fit-group')) {
+                    document.getElementById('bg-fit-group').style.display = 'none';
                 }
-                
-                console.log('✓ Background image cleared, transparent checkbox unlocked');
+                if (bgImage) bgImage.value = '';
+
+                console.log('✅ Background image cleared and texture disposed');
             });
         }
         
-        // Background fit
-        const bgFit = document.getElementById('bg-fit');
+        // === BACKGROUND FIT ===
+        // Note: Three.js scene.background doesn't support fit modes like CSS
+        // The texture will automatically fill the viewport
+        // For more control, this would require custom shader materials
         if (bgFit) {
-            bgFit.addEventListener('change', (e) => {
-                if (window.Chatooly && window.Chatooly.backgroundManager) {
-                    window.Chatooly.backgroundManager.setFit(e.target.value);
-                    
-                    // Re-apply background CSS after changing fit mode
-                    const container = document.getElementById('chatooly-container');
-                    const bgCSS = window.Chatooly.backgroundManager.getBackgroundCSS();
-                    container.style.background = bgCSS;
-                    this.canvas.style.background = 'none'; // Keep canvas transparent
-                    this.canvas.style.zIndex = '1'; // Ensure canvas stays on top
-                    console.log('🎨 Background fit changed, CSS updated');
-                }
+            bgFit.addEventListener('change', () => {
+                console.log('⚠️ Background fit mode not supported with Three.js textures');
+                console.log('   Texture will fill viewport automatically');
+                // Three.js scene.background always stretches to fill the viewport
             });
         }
         
-        // Set default background - but HDRI will override this when loaded
-        // const defaultBgColor = document.getElementById('bg-color').value;
-        // this.scene.background = new THREE.Color(defaultBgColor);
-        // Note: Scene background is set by HDRI system, background color only applies when transparent is unchecked
-        console.log(`✓ Background controls initialized`);
+        // Initialize default state
+        this.updateCanvasBackground();
+        console.log('✅ Background controls initialized');
     }
     
     onCanvasResized(e) {
-        // Handle Chatooly canvas resize events (aspect ratio changes)
-        console.log('Canvas resized:', e.detail);
-        
-        const canvas = e.detail.canvas;
-        const newWidth = canvas.width;
-        const newHeight = canvas.height;
-        
-        // Update camera aspect ratio
-        this.camera.aspect = newWidth / newHeight;
+        // Handle Chatooly canvas resize events
+        console.log('Chatooly resize event received:', e.detail);
+
+        // OVERRIDE: Force HD resolution (1920x1080) regardless of container size
+        // This ensures high-quality rendering and exports
+        this.canvas.width = 1920;
+        this.canvas.height = 1080;
+
+        // Update camera aspect ratio for 16:9
+        this.camera.aspect = 1920 / 1080;
         this.camera.updateProjectionMatrix();
-        
-        // Update renderer size to match canvas internal resolution
-        this.renderer.setSize(newWidth, newHeight, false);
-        
-        console.log(`Camera updated: ${newWidth}x${newHeight}, aspect: ${this.camera.aspect.toFixed(2)}`);
+
+        // Update renderer size to HD resolution
+        this.renderer.setSize(1920, 1080, false);
+
+        console.log('Canvas forced to Full HD: 1920x1080 (aspect: 16:9)');
     }
     
     onWindowResize() {
         // Handle window resize events
-        const width = this.canvas.clientWidth;
-        const height = this.canvas.clientHeight;
-        
-        this.camera.aspect = width / height;
+        // Force HD resolution even on window resize
+        this.canvas.width = 1920;
+        this.canvas.height = 1080;
+
+        this.camera.aspect = 1920 / 1080;
         this.camera.updateProjectionMatrix();
-        
-        this.renderer.setSize(width, height);
+
+        this.renderer.setSize(1920, 1080, false);
+
+        console.log('Window resized - canvas maintained at Full HD: 1920x1080');
     }
     
     animate() {
