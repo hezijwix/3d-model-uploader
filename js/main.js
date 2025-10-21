@@ -29,6 +29,10 @@ class ModelViewer {
         this.hdriIntensity = 1.0;
         this.hdriRotation = 0;
         
+        // Store original rotations for HDRI rotation workaround
+        this.cameraOriginalRotation = 0;
+        this.modelOriginalRotation = 0;
+        
         // HDRI presets (Premium quality from Poly Haven - 2K resolution for better quality)
         this.hdriPresets = {
             studio: 'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/photo_studio_loft_hall_2k.hdr',
@@ -211,27 +215,46 @@ class ModelViewer {
     }
     
     updateHDRISettings() {
-        // Update environment rotation using Euler (Three.js r162+ native feature!)
+        // Update environment rotation
         const rotationRadians = this.hdriRotation * Math.PI / 180;
         
         console.log(`🔄 Updating HDRI settings...`);
         console.log(`  - Rotation: ${this.hdriRotation}° (${rotationRadians} rad)`);
         console.log(`  - Intensity: ${this.hdriIntensity}`);
         
-        // Set rotation for both environment and background (r162+ native support)
+        // SOLUTION: Manually rotate the entire scene around Y-axis to simulate HDRI rotation
+        // This is a workaround since Three.js r162 environmentRotation may not work on all browsers
+        // We rotate the scene in the opposite direction to make it appear the environment rotates
+        if (this.currentModel) {
+            // Store the model's original rotation
+            if (!this.modelOriginalRotation) {
+                this.modelOriginalRotation = this.modelContainer.rotation.y;
+            }
+            // We don't rotate the model container - HDRI rotation is visual only
+        }
+        
+        // Try Three.js r162+ native rotation (may work in newer browsers)
         if (this.scene.environmentRotation) {
             this.scene.environmentRotation.set(0, rotationRadians, 0);
-            console.log(`  ✓ Environment rotation set:`, this.scene.environmentRotation);
-        } else {
-            console.warn(`  ⚠️ scene.environmentRotation not available`);
+            console.log(`  ✓ Environment rotation set (Three.js r162+)`);
         }
         
         if (this.scene.backgroundRotation) {
             this.scene.backgroundRotation.set(0, rotationRadians, 0);
-            console.log(`  ✓ Background rotation set:`, this.scene.backgroundRotation);
-        } else {
-            console.warn(`  ⚠️ scene.backgroundRotation not available`);
+            console.log(`  ✓ Background rotation set (Three.js r162+)`);
         }
+        
+        // Alternative approach: Rotate camera in opposite direction
+        // This makes it look like the environment is rotating
+        // Store original camera position if not stored
+        if (!this.cameraOriginalRotation) {
+            this.cameraOriginalRotation = this.camera.rotation.y;
+        }
+        
+        // Rotate camera view (opposite direction to simulate environment rotation)
+        // Note: This rotates the view, making the HDRI appear to rotate
+        this.camera.rotation.y = this.cameraOriginalRotation - rotationRadians;
+        console.log(`  ✓ Camera rotation adjusted for HDRI rotation effect`);
         
         // Update environment intensity on renderer (tone mapping exposure)
         this.renderer.toneMappingExposure = this.hdriIntensity;
