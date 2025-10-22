@@ -17,5 +17,5 @@ window.ChatoolyConfig = {
     tags: ["3d", "model", "viewer", "rendering", "gltf", "fbx", "hdri"],
     description: "Upload and visualize 3D models with IBL lighting, turntable animation, and high-quality rendering",
     version: "1.0.0",
-    author: "Your Name"  // TODO: Update with your name
+    author: "Studio Video"
 };
